@@ -11,7 +11,7 @@ DATA_DIRECTORIES = [
 	Path("IMU_glasses_data_clean"),
 	Path("IMU_necklace_data_clean"),
 ]
-DEFAULT_SAVE_DIR: Path | None = Path("figures")
+DEFAULT_SAVE_DIR: Path | None = Path("figures_derivative")
 SHOW_FIGURES = False
 
 
@@ -60,12 +60,10 @@ def parse_imu_blocks(file_path: Path) -> list[dict[str, object]]:
 			if not line:
 				continue
 
-			# Ignore CSV header lines (including the first line).
 			if line.lower() == "ax,ay,az,gx,gy,gz":
 				continue
 
 			if line.lower().startswith("samples stored"):
-				# Close previous block before starting a new one.
 				if current_expected is not None:
 					blocks.append({"expected": current_expected, "rows": current_rows})
 
@@ -83,7 +81,6 @@ def parse_imu_blocks(file_path: Path) -> list[dict[str, object]]:
 						) from exc
 				continue
 
-			# Parse sensor sample lines.
 			parts = [p.strip() for p in line.split(",")]
 			if len(parts) != 6:
 				continue
@@ -95,14 +92,26 @@ def parse_imu_blocks(file_path: Path) -> list[dict[str, object]]:
 
 			current_rows.append(row)
 
-	# Add the final block if one was open.
 	if current_expected is not None:
 		blocks.append({"expected": current_expected, "rows": current_rows})
 
 	return blocks
 
 
-def plot_blocks(
+def compute_derivative_rows(rows: list[list[float]]) -> list[list[float]]:
+	derivative_rows: list[list[float]] = []
+
+	for idx in range(1, len(rows)):
+		prev_row = rows[idx - 1]
+		curr_row = rows[idx]
+		derivative_rows.append(
+			[curr_row[channel_idx] - prev_row[channel_idx] for channel_idx in range(6)]
+		)
+
+	return derivative_rows
+
+
+def plot_blocks_derivative(
 	blocks: list[dict[str, object]],
 	source_name: str,
 	show: bool = True,
@@ -121,21 +130,22 @@ def plot_blocks(
 		rows = block["rows"]
 		expected = block["expected"]
 
-		if not isinstance(rows, list) or not rows:
+		if not isinstance(rows, list) or len(rows) < 2:
 			continue
 
-		x = list(range(len(rows)))
+		derivative_rows = compute_derivative_rows(rows)
+		x = list(range(1, len(rows)))
 
 		fig, ax = plt.subplots(figsize=(11, 6))
 		for channel_idx, channel_name in enumerate(CHANNELS):
-			y = [sample[channel_idx] for sample in rows]
+			y = [sample[channel_idx] for sample in derivative_rows]
 			ax.plot(x, y, label=channel_name, linewidth=1.4)
 
 		ax.set_xlabel("Sample index")
-		ax.set_ylabel("Sensor value")
+		ax.set_ylabel("First derivative (delta/sample)")
 		ax.set_title(
-			f"{source_name} - Block {idx} "
-			f"(expected={expected}, actual={len(rows)})"
+			f"{source_name} - Block {idx} derivative "
+			f"(expected={expected}, actual={len(rows)}, derivative_points={len(derivative_rows)})"
 		)
 		ax.grid(True, alpha=0.3)
 		ax.legend(ncols=3)
@@ -155,9 +165,10 @@ def plot_blocks(
 	if save_dir is None:
 		print("Figure saving is disabled because save_dir is None.")
 	elif saved_count == 0:
-		print(f"No figures were saved to {save_dir.resolve()} (no non-empty blocks).")
+		print(f"No figures were saved to {save_dir.resolve()} (no blocks with 2+ samples).")
 	else:
 		print(f"Saved {saved_count} figure(s) to {save_dir.resolve()}.")
+
 
 input_files = collect_input_files(DATA_DIRECTORIES)
 if not input_files:
@@ -184,7 +195,7 @@ for input_path in input_files:
 	if DEFAULT_SAVE_DIR is not None:
 		output_dir = build_output_dir(DEFAULT_SAVE_DIR, input_path)
 
-	plot_blocks(
+	plot_blocks_derivative(
 		blocks=blocks,
 		source_name=input_path.name,
 		show=SHOW_FIGURES,
@@ -192,4 +203,3 @@ for input_path in input_files:
 	)
 
 	print(f"Parsed {len(blocks)} block(s) from {input_path}.")
-
